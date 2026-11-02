@@ -1,0 +1,488 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Jarvis">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+</head><body style="margin:0">
+<title>Jarvis</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one centred column. Wordmark and voice toggle on top, the orb as the single focal control, live transcript line, quick commands, a running log, and a typed-command bar pinned to the bottom. */
+:root {
+  --bg: #070b12;
+  --surface: #0d1522;
+  --line: #1a2a3d;
+  --fg: #d9e7f3;
+  --muted: #7f97ad;
+  --accent: #4fd1e8;
+  --accent-ink: #04222a;
+  --glow: rgba(79, 209, 232, 0.32);
+  --warn: #f2b84b;
+  --display: 'Chakra Petch', ui-sans-serif, system-ui, sans-serif;
+  --mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg: #edf2f6; --surface: #ffffff; --line: #cfdbe5; --fg: #0b1a28; --muted: #546a7e;
+    --accent: #0b7f97; --accent-ink: #ffffff; --glow: rgba(11, 127, 151, 0.22); --warn: #9a6200;
+    color-scheme: light;
+  }
+}
+:root[data-theme="light"] {
+  --bg: #edf2f6; --surface: #ffffff; --line: #cfdbe5; --fg: #0b1a28; --muted: #546a7e;
+  --accent: #0b7f97; --accent-ink: #ffffff; --glow: rgba(11, 127, 151, 0.22); --warn: #9a6200;
+  color-scheme: light;
+}
+
+* { box-sizing: border-box; }
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 14px;
+  line-height: 1.55;
+  padding-block: 20px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+.app { max-width: 620px; margin: 0 auto; display: flex; flex-direction: column; gap: 22px; min-height: 100%; }
+
+header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.wordmark { font-family: var(--display); font-weight: 700; font-size: 22px; letter-spacing: 0.32em; text-transform: uppercase; margin: 0; }
+.wordmark span { color: var(--accent); }
+.ghost {
+  font: 500 12px var(--mono); letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--muted); background: transparent; border: 1px solid var(--line);
+  padding: 8px 12px; border-radius: 4px; cursor: pointer;
+}
+.ghost:hover { color: var(--fg); border-color: var(--muted); }
+button:focus-visible, input:focus-visible, summary:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.stage { display: flex; flex-direction: column; align-items: center; gap: 14px; padding-top: 6px; }
+.orb-wrap { position: relative; width: 168px; height: 168px; display: grid; place-items: center; }
+.orb {
+  position: relative; z-index: 1; width: 132px; height: 132px; border-radius: 50%;
+  border: 2px solid var(--accent); background: var(--surface); color: var(--accent);
+  display: grid; place-items: center; cursor: pointer;
+  box-shadow: 0 0 36px var(--glow), inset 0 0 22px var(--glow);
+  transition: transform 0.15s ease, background 0.2s ease, color 0.2s ease;
+}
+.orb:active { transform: scale(0.96); }
+.orb svg { width: 44px; height: 44px; }
+.ring { position: absolute; inset: 14px; border-radius: 50%; border: 1px solid var(--accent); opacity: 0; pointer-events: none; }
+.listening .orb { background: var(--accent); color: var(--accent-ink); }
+.listening .ring { animation: pulse 1.8s ease-out infinite; }
+.listening .ring.r2 { animation-delay: 0.9s; }
+.speaking .orb { box-shadow: 0 0 52px var(--glow), inset 0 0 30px var(--glow); animation: breathe 1.2s ease-in-out infinite; }
+.blocked .orb { border-color: var(--line); color: var(--muted); box-shadow: none; }
+@keyframes pulse { 0% { transform: scale(0.9); opacity: 0.8; } 100% { transform: scale(1.35); opacity: 0; } }
+@keyframes breathe { 50% { transform: scale(1.04); } }
+@media (prefers-reduced-motion: reduce) { .ring, .orb { animation: none !important; transition: none; } }
+
+.status { margin: 0; font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); text-align: center; }
+.heard { margin: 0; min-height: 1.6em; text-align: center; color: var(--fg); font-size: 15px; }
+
+.chips { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+.chip {
+  font: 400 12.5px var(--mono); color: var(--fg); background: var(--surface);
+  border: 1px solid var(--line); padding: 8px 12px; border-radius: 999px; cursor: pointer;
+}
+.chip:hover { border-color: var(--accent); }
+
+.timers { display: flex; flex-wrap: wrap; gap: 8px; }
+.timer {
+  display: inline-flex; align-items: center; gap: 10px; border: 1px solid var(--warn);
+  color: var(--warn); padding: 6px 6px 6px 12px; border-radius: 4px; font-variant-numeric: tabular-nums;
+}
+.timer b { font-weight: 500; }
+.timer button { all: unset; cursor: pointer; padding: 2px 8px; color: var(--muted); }
+.timer button:hover { color: var(--fg); }
+.timer button:focus-visible { outline: 2px solid var(--accent); }
+
+.log { display: flex; flex-direction: column; gap: 14px; border-top: 1px solid var(--line); padding-top: 18px; }
+.row { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 12px; }
+.who { font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); padding-top: 3px; }
+.row.jarvis .who { color: var(--accent); }
+.msg { min-width: 0; overflow-wrap: anywhere; }
+.msg a { color: var(--accent); display: inline-block; margin-top: 6px; }
+
+details { border: 1px solid var(--line); border-radius: 4px; background: var(--surface); }
+summary { cursor: pointer; padding: 10px 14px; font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.notes { list-style: none; margin: 0; padding: 0 14px 12px; display: flex; flex-direction: column; gap: 8px; }
+.notes li { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
+.notes li span { min-width: 0; overflow-wrap: anywhere; }
+.notes button { all: unset; cursor: pointer; color: var(--muted); padding: 0 6px; }
+.notes button:hover { color: var(--fg); }
+.empty { color: var(--muted); padding: 0 14px 12px; margin: 0; }
+
+form.bar {
+  position: sticky; bottom: 0; display: flex; gap: 8px; margin-top: auto;
+  background: var(--bg); padding-top: 10px; padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+form.bar input {
+  flex: 1; min-width: 0; font: 400 16px var(--mono); color: var(--fg); background: var(--surface);
+  border: 1px solid var(--line); border-radius: 4px; padding: 12px 14px;
+}
+form.bar input::placeholder { color: var(--muted); }
+form.bar button {
+  font: 600 13px var(--display); letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--accent-ink); background: var(--accent); border: 0; border-radius: 4px; padding: 0 18px; cursor: pointer;
+}
+</style>
+
+<div class="app" id="app">
+  <header>
+    <h1 class="wordmark">Jar<span>vis</span></h1>
+    <button class="ghost" id="voiceToggle" type="button" aria-pressed="true">Voice on</button>
+  </header>
+
+  <section class="stage" id="stage" aria-label="Voice control">
+    <div class="orb-wrap">
+      <span class="ring"></span><span class="ring r2"></span>
+      <button class="orb" id="orb" type="button" aria-label="Tap to talk to Jarvis">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="9" y="3" width="6" height="11" rx="3"></rect>
+          <path d="M5 11a7 7 0 0 0 14 0M12 18v3M8.5 21h7"></path>
+        </svg>
+      </button>
+    </div>
+    <p class="status" id="status" role="status">Ready. Tap the orb and speak.</p>
+    <p class="heard" id="heard" aria-live="polite"></p>
+  </section>
+
+  <div class="chips" id="chips">
+    <button class="chip" type="button" data-cmd="What time is it">What time is it</button>
+    <button class="chip" type="button" data-cmd="Set a timer for 5 minutes">Timer, 5 minutes</button>
+    <button class="chip" type="button" data-cmd="Calculate 18 times 24">18 times 24</button>
+    <button class="chip" type="button" data-cmd="What can you do">What can you do</button>
+  </div>
+
+  <div class="timers" id="timers" aria-label="Running timers"></div>
+
+  <details id="notesBox">
+    <summary id="notesSummary">Notes (0)</summary>
+    <ul class="notes" id="notes"></ul>
+    <p class="empty" id="notesEmpty">No notes yet. Say "take a note" followed by what to remember.</p>
+  </details>
+
+  <section class="log" id="log" aria-label="Conversation"></section>
+
+  <form class="bar" id="form" autocomplete="off">
+    <input id="cmd" type="text" enterkeyhint="send" placeholder="Type a command" aria-label="Type a command">
+    <button type="submit">Send</button>
+  </form>
+</div>
+
+<script>
+(function () {
+  //#pure-start
+  var ONES = { zero:0, one:1, two:2, three:3, four:4, five:5, six:6, seven:7, eight:8, nine:9, ten:10, eleven:11, twelve:12, thirteen:13, fourteen:14, fifteen:15, sixteen:16, seventeen:17, eighteen:18, nineteen:19 };
+  var TENS = { twenty:20, thirty:30, forty:40, fifty:50, sixty:60, seventy:70, eighty:80, ninety:90 };
+
+  function numberWords(s) {
+    return s
+      .replace(/\b(twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)(?:[\s-](one|two|three|four|five|six|seven|eight|nine))?\b/g,
+        function (m, a, b) { return String(TENS[a] + (b ? ONES[b] : 0)); })
+      .replace(/\b(zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen)\b/g,
+        function (m) { return String(ONES[m]); });
+  }
+
+  function toExpr(s) {
+    var e = numberWords(s.toLowerCase());
+    e = e.replace(/,/g, '')
+      .replace(/\bto the power of\b/g, '**')
+      .replace(/\bsquared\b/g, '**2')
+      .replace(/\bmultiplied by\b|\btimes\b|\bx\b/g, '*')
+      .replace(/\bdivided by\b|\bover\b/g, '/')
+      .replace(/\bplus\b/g, '+')
+      .replace(/\bminus\b/g, '-')
+      .replace(/\^/g, '**')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!/^[0-9+\-*/().\s]+$/.test(e)) return null;
+    if (!/\d/.test(e) || !/[+\-*/]/.test(e)) return null;
+    return e;
+  }
+
+  function evalExpr(expr) {
+    try {
+      var r = Function('"use strict";return (' + expr + ')')();
+      if (typeof r !== 'number' || !isFinite(r)) return null;
+      return +r.toFixed(6);
+    } catch (err) { return null; }
+  }
+
+  function parseDuration(s) {
+    var t = numberWords(s.toLowerCase());
+    var total = 0, found = false;
+    if (/\bhalf an hour\b/.test(t)) { total += 1800; found = true; }
+    t = t.replace(/\bhalf an hour\b/g, ' ').replace(/\ban hour\b/g, '1 hour').replace(/\ba minute\b/g, '1 minute').replace(/\ba second\b/g, '1 second');
+    var re = /(\d+(?:\.\d+)?)\s*(hours?|hrs?|minutes?|mins?|seconds?|secs?)\b/g, m;
+    while ((m = re.exec(t))) {
+      var n = parseFloat(m[1]), u = m[2][0];
+      total += u === 'h' ? n * 3600 : u === 'm' ? n * 60 : n;
+      found = true;
+    }
+    return found && total > 0 ? Math.round(total) : null;
+  }
+
+  function formatDur(sec) {
+    var h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60, out = [];
+    if (h) out.push(h + (h === 1 ? ' hour' : ' hours'));
+    if (m) out.push(m + (m === 1 ? ' minute' : ' minutes'));
+    if (s) out.push(s + (s === 1 ? ' second' : ' seconds'));
+    return out.join(' ');
+  }
+
+  function clock(sec) {
+    var h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+    var p = function (x) { return (x < 10 ? '0' : '') + x; };
+    return (h ? h + ':' + p(m) : m) + ':' + p(s);
+  }
+
+  var SITES = {
+    youtube: 'https://www.youtube.com', google: 'https://www.google.com', gmail: 'https://mail.google.com',
+    maps: 'https://maps.google.com', 'google maps': 'https://maps.google.com', whatsapp: 'https://web.whatsapp.com',
+    wikipedia: 'https://www.wikipedia.org', news: 'https://www.news24.com', news24: 'https://www.news24.com',
+    spotify: 'https://open.spotify.com', github: 'https://github.com', calendar: 'https://calendar.google.com'
+  };
+  //#pure-end
+
+  var $ = function (id) { return document.getElementById(id); };
+  var logEl = $('log'), statusEl = $('status'), heardEl = $('heard'), stage = $('stage'), orb = $('orb');
+  var timersEl = $('timers'), notesEl = $('notes'), notesSummary = $('notesSummary'), notesEmpty = $('notesEmpty');
+  var form = $('form'), input = $('cmd'), voiceBtn = $('voiceToggle');
+
+  var voiceOn = true, notes = [], timers = [], nextId = 1, tick = null, audioCtx = null;
+  try { notes = JSON.parse(localStorage.getItem('jarvis-notes') || '[]'); if (!Array.isArray(notes)) notes = []; } catch (e) { notes = []; }
+  function saveNotes() { try { localStorage.setItem('jarvis-notes', JSON.stringify(notes)); } catch (e) {} }
+
+  function setStatus(t) { statusEl.textContent = t; }
+  function setState(s) { stage.classList.remove('listening', 'speaking', 'blocked'); if (s) stage.classList.add(s); }
+
+  function addRow(who, text, link, quiet) {
+    var row = document.createElement('div'); row.className = 'row ' + who;
+    var w = document.createElement('div'); w.className = 'who'; w.textContent = who === 'you' ? 'You' : 'Jarvis';
+    var m = document.createElement('div'); m.className = 'msg'; m.textContent = text;
+    if (link) {
+      m.appendChild(document.createElement('br'));
+      var a = document.createElement('a'); a.href = link.url; a.target = '_blank'; a.rel = 'noopener'; a.textContent = link.label;
+      m.appendChild(a);
+    }
+    row.appendChild(w); row.appendChild(m); logEl.appendChild(row);
+    if (!quiet) row.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }
+
+  function unlockAudio() {
+    try {
+      var AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      audioCtx = audioCtx || new AC();
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+    } catch (e) {}
+  }
+  function beep() {
+    try {
+      if (!audioCtx) return;
+      [0, 0.28, 0.56].forEach(function (d) {
+        var o = audioCtx.createOscillator(), g = audioCtx.createGain();
+        o.frequency.value = 880; o.connect(g); g.connect(audioCtx.destination);
+        var t = audioCtx.currentTime + d;
+        g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.25, t + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.22);
+        o.start(t); o.stop(t + 0.25);
+      });
+    } catch (e) {}
+    try { if (navigator.vibrate) navigator.vibrate([200, 100, 200]); } catch (e) {}
+  }
+
+  function say(text) {
+    if (!voiceOn || !('speechSynthesis' in window)) return;
+    try {
+      window.speechSynthesis.cancel();
+      var u = new SpeechSynthesisUtterance(text);
+      u.lang = 'en-GB'; u.rate = 1.02;
+      u.onstart = function () { if (!listening) setState('speaking'); };
+      u.onend = u.onerror = function () { if (!listening) setState(''); };
+      window.speechSynthesis.speak(u);
+    } catch (e) {}
+  }
+
+  function renderNotes() {
+    notesEl.textContent = '';
+    notes.forEach(function (n, i) {
+      var li = document.createElement('li');
+      var sp = document.createElement('span'); sp.textContent = n;
+      var b = document.createElement('button'); b.type = 'button'; b.textContent = '✕'; b.setAttribute('aria-label', 'Delete note');
+      b.addEventListener('click', function () { notes.splice(i, 1); saveNotes(); renderNotes(); });
+      li.appendChild(sp); li.appendChild(b); notesEl.appendChild(li);
+    });
+    notesSummary.textContent = 'Notes (' + notes.length + ')';
+    notesEmpty.hidden = notes.length > 0;
+  }
+
+  function renderTimers() {
+    timersEl.textContent = '';
+    var now = Date.now();
+    timers.forEach(function (t) {
+      var left = Math.max(0, Math.ceil((t.end - now) / 1000));
+      var box = document.createElement('div'); box.className = 'timer';
+      var b = document.createElement('b'); b.textContent = clock(left);
+      var l = document.createElement('span'); l.textContent = t.label;
+      var x = document.createElement('button'); x.type = 'button'; x.textContent = '✕'; x.setAttribute('aria-label', 'Cancel timer');
+      x.addEventListener('click', function () { timers = timers.filter(function (q) { return q.id !== t.id; }); renderTimers(); });
+      box.appendChild(b); box.appendChild(l); box.appendChild(x); timersEl.appendChild(box);
+    });
+    if (timers.length && !tick) tick = setInterval(onTick, 1000);
+    if (!timers.length && tick) { clearInterval(tick); tick = null; }
+  }
+  function onTick() {
+    var now = Date.now(), done = timers.filter(function (t) { return t.end <= now; });
+    if (done.length) {
+      timers = timers.filter(function (t) { return t.end > now; });
+      done.forEach(function (t) { var msg = 'Your ' + t.label + ' timer is done.'; addRow('jarvis', msg); say(msg); beep(); });
+    }
+    renderTimers();
+  }
+
+  var JOKES = [
+    'I would tell you a UDP joke, but you might not get it.',
+    'Why do programmers prefer dark mode? Because light attracts bugs.',
+    'I told my calculator a joke. It said it did not see the point.'
+  ];
+
+  function handle(raw) {
+    var orig = raw.trim().replace(/^(hey |ok |okay )?jarvis[,.!:]?\s*/i, '').replace(/[?!.]+$/, '').trim();
+    var t = orig.toLowerCase(), m;
+    if (!t) return { text: 'Yes? I am listening.' };
+
+    if (/^(hi|hello|hey|good (morning|afternoon|evening))\b/.test(t)) return { text: 'Hello. What do you need?' };
+
+    if (/\bwhat('?s| is)?( the)? time\b|\btime is it\b|^(the )?time$/.test(t))
+      return { text: 'It is ' + new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) + '.' };
+
+    if (/\b(today'?s date|what('?s| is)?( the)? date|what day is it|which day is it)\b/.test(t))
+      return { text: 'Today is ' + new Date().toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }) + '.' };
+
+    if (/\b(cancel|stop|clear|delete)\b.*\btimers?\b/.test(t)) {
+      var n = timers.length; timers = []; renderTimers();
+      return { text: n ? 'Cancelled ' + n + (n === 1 ? ' timer.' : ' timers.') : 'There are no timers running.' };
+    }
+    if (/\b(timer|remind me in|countdown)\b/.test(t)) {
+      var sec = parseDuration(t);
+      if (!sec) return { text: 'For how long? Try "set a timer for 10 minutes".' };
+      if (sec > 86400) return { text: 'Timers are limited to 24 hours.' };
+      var label = formatDur(sec);
+      timers.push({ id: nextId++, label: label, end: Date.now() + sec * 1000 }); renderTimers();
+      return { text: 'Timer set for ' + label + '. Keep Jarvis open so it can alert you.' };
+    }
+
+    if ((m = orig.match(/^(?:take a note|add a note|make a note|note|remember)\b(?: that| to)?[\s:,-]*(.+)$/i))) {
+      notes.unshift(m[1].trim()); saveNotes(); renderNotes();
+      return { text: 'Noted: ' + m[1].trim() };
+    }
+    if (/\b(read|show|what are|list)\b.*\bnotes?\b|^notes$/.test(t)) {
+      if (!notes.length) return { text: 'You have no notes.' };
+      document.getElementById('notesBox').open = true;
+      return { text: 'You have ' + notes.length + (notes.length === 1 ? ' note. ' : ' notes. ') + notes.slice(0, 5).join('. ') + '.' };
+    }
+    if (/\b(clear|delete|erase)\b.*\bnotes?\b/.test(t)) { notes = []; saveNotes(); renderNotes(); return { text: 'All notes cleared.' }; }
+
+    if (/\b(mute|be quiet|stop talking|silence)\b/.test(t)) { setVoice(false); return { text: 'Voice replies are off. I will answer in text.' }; }
+    if (/\b(unmute|speak to me|talk to me|voice on)\b/.test(t)) { setVoice(true); return { text: 'Voice replies are on.' }; }
+
+    if (/\b(joke|make me laugh)\b/.test(t)) return { text: JOKES[Math.floor(Math.random() * JOKES.length)] };
+
+    if (/\b(what can you do|help|commands)\b/.test(t))
+      return { text: 'I can tell the time and date, set timers, take and read notes, calculate, open websites and search the web. Try "set a timer for 3 minutes", "calculate 15 percent of 200" or "open YouTube".' };
+
+    if ((m = orig.match(/^(?:search(?: the web)?(?: for)?|google|look up|find)\s+(.+)$/i))) {
+      return { text: 'Searching for ' + m[1] + '.', link: { url: 'https://www.google.com/search?q=' + encodeURIComponent(m[1]), label: 'Open results' } };
+    }
+
+    if ((m = t.match(/^(?:open|go to|launch)\s+(.+)$/))) {
+      var name = m[1].replace(/^the\s+/, '').trim();
+      if (SITES[name]) return { text: 'Opening ' + name + '.', link: { url: SITES[name], label: 'Open ' + name } };
+      if (/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(name)) return { text: 'Opening ' + name + '.', link: { url: 'https://' + name, label: 'Open ' + name } };
+      return { text: 'I do not know that site, so here is a search.', link: { url: 'https://www.google.com/search?q=' + encodeURIComponent(name), label: 'Search for ' + name } };
+    }
+
+    var cm = t.match(/^(?:calculate|compute|what is|what's|whats|how much is)\s+(.+)$/);
+    var pm = (cm ? cm[1] : t).match(/^(\d+(?:\.\d+)?)\s*(?:%|percent)\s*of\s*(\d+(?:\.\d+)?)$/);
+    if (pm) return { text: pm[1] + ' percent of ' + pm[2] + ' is ' + +(parseFloat(pm[1]) / 100 * parseFloat(pm[2])).toFixed(6) + '.' };
+    var expr = toExpr(cm ? cm[1] : t);
+    if (expr) {
+      var r = evalExpr(expr);
+      return r === null ? { text: 'That does not compute.' } : { text: 'The answer is ' + r + '.' };
+    }
+
+    return { text: 'I do not have a command for that yet. Say "help" to hear what I can do.', link: { url: 'https://www.google.com/search?q=' + encodeURIComponent(orig), label: 'Search the web for it' } };
+  }
+
+  function run(text) {
+    var clean = text.trim();
+    if (!clean) return;
+    addRow('you', clean);
+    var r = handle(clean);
+    addRow('jarvis', r.text, r.link);
+    say(r.text);
+  }
+
+  function setVoice(on) {
+    voiceOn = on; voiceBtn.textContent = on ? 'Voice on' : 'Voice off'; voiceBtn.setAttribute('aria-pressed', String(on));
+    if (!on) { try { window.speechSynthesis.cancel(); } catch (e) {} setState(''); }
+  }
+
+  var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  var rec = null, listening = false, micBlocked = false;
+
+  function blockMic(msg) { micBlocked = true; listening = false; setState('blocked'); setStatus(msg); }
+
+  function startListening() {
+    unlockAudio();
+    if (!SR) { blockMic('Speech recognition is not available here. Type a command below.'); return; }
+    try { window.speechSynthesis.cancel(); } catch (e) {}
+    rec = new SR();
+    rec.lang = 'en-ZA'; rec.interimResults = true; rec.continuous = false; rec.maxAlternatives = 1;
+    var finalText = '';
+    rec.onstart = function () { listening = true; micBlocked = false; setState('listening'); setStatus('Listening'); heardEl.textContent = ''; };
+    rec.onresult = function (e) {
+      var txt = '';
+      for (var i = e.resultIndex; i < e.results.length; i++) {
+        txt += e.results[i][0].transcript;
+        if (e.results[i].isFinal) finalText = txt;
+      }
+      heardEl.textContent = txt;
+    };
+    rec.onerror = function (e) {
+      if (e.error === 'not-allowed' || e.error === 'service-not-allowed') blockMic('Microphone is blocked in this view. Type a command below.');
+      else if (e.error === 'no-speech') setStatus('Did not catch that. Tap and try again.');
+      else if (e.error !== 'aborted') setStatus('Could not hear you (' + e.error + '). Tap to retry.');
+    };
+    rec.onend = function () {
+      listening = false;
+      if (!micBlocked) { setState(''); if (!/^did not|^could not/i.test(statusEl.textContent)) setStatus('Ready. Tap the orb and speak.'); }
+      if (finalText) { var f = finalText; finalText = ''; setTimeout(function () { heardEl.textContent = ''; }, 1200); run(f); }
+    };
+    try { rec.start(); } catch (err) { setStatus('Could not start the microphone. Tap to retry.'); }
+  }
+
+  orb.addEventListener('click', function () {
+    if (listening && rec) { try { rec.stop(); } catch (e) {} return; }
+    startListening();
+  });
+  voiceBtn.addEventListener('click', function () { unlockAudio(); setVoice(!voiceOn); });
+  form.addEventListener('submit', function (e) { e.preventDefault(); unlockAudio(); var v = input.value; input.value = ''; run(v); });
+  $('chips').addEventListener('click', function (e) {
+    var b = e.target.closest('button[data-cmd]'); if (!b) return; unlockAudio(); run(b.getAttribute('data-cmd'));
+  });
+
+  renderNotes();
+  addRow('jarvis', 'Good to see you. Tap the orb and say "what time is it", or type a command below. Say "help" for everything I can do.', null, true);
+})();
+</script>
+</body></html>
